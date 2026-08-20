@@ -214,3 +214,32 @@ with a stale one fails. Cleared by one clean pass with fresh cookies.
 **Diagnostic caveat:** the DCR probe in the playbook tests layer 1 only. It
 reported the portal callback as allowed while authorization rejected it. Useful
 tool, wrong layer — confirm the real flow before concluding.
+
+## 9. Cloudflare caches the tool snapshot, and nothing clears it in place
+
+Adding `explain_query` took four attempts to become visible, none of which were
+server-side problems. Throughout, the origin served 11 tools with the full
+parameter set while Cloudflare served 10 with `execute_sql(sql)` only.
+
+Tried and failed: Zero Trust resync; re-authenticating the server; several
+disconnect/reconnect cycles of the connector; waiting for the documented
+~2-hour automatic sync.
+
+One reconnect actively regressed the client — a session that could call
+`timeout_ms` lost the parameter afterwards, because reconnecting re-fetches
+Cloudflare's stored snapshot and that copy was older than the one the client
+already held.
+
+**Deleting and re-adding the MCP server entry fixed it immediately.** The entry
+ID changes as a side effect, which is a useful signal that a client is on the
+new registration.
+
+The dashboard also rendered stale descriptions with a "Modified" badge and no
+way to accept the change, which reads like a review gate but is not one — there
+is no accept action. It is simply displaying the cache.
+
+**Consequence for the design:** this is why `list_views` leads with a contract
+version fingerprinting the config file and live schema. When the platform's own
+UI cannot be trusted to show what a client will receive, the server has to
+announce its own identity, and the client has to be able to compare it against
+`GET /introspection` on the origin.

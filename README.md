@@ -201,6 +201,11 @@ why `postgres-mcp`'s restricted mode was abandoned.
   to a bounded `count(*)` at boot.
 - **Supavisor rewrites `application_name`** to "Supavisor", so per-client
   connection attribution through the pooler is not possible.
+- **Cloudflare caches the tool snapshot per MCP server entry.** Resync,
+  re-authentication and reconnecting all fail to clear it, and reconnecting can
+  hand a client an *older* snapshot than it already had. Deleting and re-adding
+  the server entry is the only fix. This is why `list_views` announces a
+  contract version — compare it with `GET /introspection` on the origin.
 - **MCP SDK 2.0 renamed `FastMCP` to `MCPServer`** and moved it out of
   `mcp.server.fastmcp`. `requirements.txt` is a full lock for that reason.
 

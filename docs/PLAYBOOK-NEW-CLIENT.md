@@ -327,10 +327,50 @@ Ask Claude:
 | `No allowed servers available` | Server not authenticated, or no Allow policy on the **server** | Authenticate; policies are per-portal *and* per-server |
 | Server stuck `Waiting`, 0 tools | Registered `/sse`, or origin unreachable | Use `/mcp`; check DNS actually resolves |
 | Works ~9 calls then all fail, incl. `SELECT 1` | Connection leak (see below) | Restart; lower `--sessionTimeout` |
+| Tool list stale: a new tool never appears, and resync / reconnect / re-authenticate all fail | Cloudflare caches the tool snapshot **per server entry**; nothing clears it in place | **Delete the MCP server entry and re-add it.** This is the only reliable fix — see "Iterating on tools" below |
+| Dashboard shows an old tool description, no accept button | Same cached snapshot, rendered in the UI | Same fix; don't trust the dashboard as the source of truth — check the contract version returned by `list_views` |
+| Client had a working param, then lost it after reconnecting | Reconnect re-fetches Cloudflare's stored snapshot, which may be **older** than the one the client held | Delete and re-add; reconnecting can only make this worse |
 | `Redirect URI not allowed by application configuration` (after allowlisting it) | The **registered client** is stale — its `redirect_uris` were fixed at registration | Enable the shared callback and click **Authenticate now** to register a new client |
 | `Invalid state: missing or invalid nonce` | Stale state from earlier failed attempts | Clear cookies for the portal and `*.cloudflareaccess.com`, retry once in a single uninterrupted pass |
 | Admin works, end users get authorization errors | Admin and per-user flows use different callbacks | Shared callback ON, re-authenticate |
 | `Error validating query` | Restricted-mode SQL validator rejects a valid read-only construct (e.g. `AT TIME ZONE`) | Use `--access-mode=unrestricted` — the role is the real boundary; verify with the write/PII tests below |
+
+---
+
+## Iterating on tools
+
+**Cloudflare caches the tool snapshot per MCP server entry, and there is no way
+to force a refresh.** Verified the hard way:
+
+- *Resync* in Zero Trust — no effect
+- *Re-authenticate* the server — no effect
+- *Disconnect / reconnect* the connector — no effect, and it can serve an
+  **older** snapshot than the client already had
+- Waiting for the documented ~2-hour automatic sync — did not land
+
+The only thing that works is **deleting the MCP server entry and re-adding it**.
+The server ID changes (`whf-ai-agent-mcp` → `whf-mcp`), which is how you can tell
+a client is on the new entry.
+
+Description-only edits do appear to propagate. Adding or removing a *tool* does
+not. So while iterating, expect to recreate the entry each time the tool list
+changes — and do your iterating against the origin directly (`curl` the
+`tools/list` payload) rather than through Cloudflare.
+
+### Telling current from stale without trusting the dashboard
+
+`server.version` + `server.changelog` in the client config make `list_views`
+return a contract line whose fingerprint covers the config file and the live
+schema:
+
+```
+CONTRACT VERSION: 2026.08.20-3+cfg.8209150b+schema.386465202233
+```
+
+Compare it with `GET /introspection` on the origin. If they match, the client is
+current. If `list_views` has no CONTRACT VERSION line at all, the client is on a
+snapshot older than that feature. This is the only check that does not depend on
+the dashboard telling the truth.
 
 ---
 
