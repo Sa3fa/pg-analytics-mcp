@@ -10,6 +10,7 @@ generated from the live schema (facts that go stale).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable
 
 import psycopg
@@ -71,6 +72,14 @@ def execute_sql_description(cfg: Config, schema: Schema) -> str:
         parts.append(cfg.tools.execute_sql.extra.strip())
 
     return "\n\n".join(parts)
+
+
+_ORDER_BY = re.compile(r"\border\s+by\b", re.IGNORECASE)
+
+
+def _has_order_by(sql: str) -> bool:
+    """Offset paging is unsound without one — see render_rows."""
+    return bool(_ORDER_BY.search(sql))
 
 
 def _paginate(sql: str, limit: int | None, offset: int) -> str:
@@ -184,7 +193,9 @@ def register(server: MCPServer, cfg: Config, db: Database, schema: Schema) -> li
                 )
             except psycopg.Error as exc:
                 raise ValueError(f"{exc}{_schema_hint(exc, schema)}") from exc
-            return render_rows(rows, truncated, cap, offset=offset)
+            return render_rows(
+                rows, truncated, cap, offset=offset, ordered=_has_order_by(sql)
+            )
 
         server.add_tool(execute_sql, name="execute_sql", description=desc)
         registered.append("execute_sql")

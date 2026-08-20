@@ -140,6 +140,7 @@ def render_rows(
     cap: int,
     *,
     offset: int = 0,
+    ordered: bool | None = None,
 ) -> str:
     """Format rows for the model, and be explicit about what was withheld."""
     if not rows:
@@ -149,11 +150,21 @@ def render_rows(
     )
     n = len(rows)
     if truncated:
+        # Offset paging is only sound when the query has a total ORDER BY:
+        # without one Postgres may return rows in a different order per call,
+        # so pages can silently skip or duplicate rows.
+        if ordered:
+            advice = f"page with offset={offset + n}"
+        else:
+            advice = (
+                "add a total ORDER BY before paging — without one, offset paging "
+                "may silently skip or duplicate rows"
+            )
         body += (
             f"\n\n[rows_returned={n}, offset={offset}, rows_total>={offset + n + 1} "
             f"— TRUNCATED at the {cap}-row cap. The real total is unknown and may be "
-            "far larger. Either aggregate instead, or page with offset="
-            f"{offset + n}. Do not present this as a complete result.]"
+            f"far larger. Either aggregate instead, or {advice}. "
+            "Do not present this as a complete result.]"
         )
     else:
         total = offset + n
