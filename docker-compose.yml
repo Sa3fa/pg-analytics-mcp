@@ -1,0 +1,30 @@
+# Portable across VPSes running the same cloudflared -> traefik stack.
+# Everything host-specific comes from .env, so this file is never edited.
+services:
+  mcp:
+    build: .
+    image: ${MCP_CONTAINER_NAME}:local
+    container_name: ${MCP_CONTAINER_NAME}
+    restart: unless-stopped
+    env_file: .env
+    # Local publish is for verification from the VPS shell only. The tunnel
+    # reaches this through traefik on the shared network.
+    ports:
+      - "127.0.0.1:${MCP_LOCAL_PORT:-8000}:8000"
+    networks:
+      - proxy
+    # Labels MUST be list-form: Compose substitutes ${VARS} in values but NOT in
+    # mapping keys, so map-form labels would create a router literally named
+    # "${MCP_CONTAINER_NAME}" and traefik would 404.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK}"
+      - "traefik.http.routers.${MCP_CONTAINER_NAME}.rule=Host(`${MCP_HOSTNAME}`)"
+      - "traefik.http.routers.${MCP_CONTAINER_NAME}.entrypoints=web"
+      - "traefik.http.routers.${MCP_CONTAINER_NAME}.service=${MCP_CONTAINER_NAME}"
+      - "traefik.http.services.${MCP_CONTAINER_NAME}.loadbalancer.server.port=8000"
+
+networks:
+  proxy:
+    name: ${TRAEFIK_NETWORK}
+    external: true

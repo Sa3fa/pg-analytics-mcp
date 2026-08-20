@@ -1,0 +1,112 @@
+# Example client config — copy this, rename it, point MCP_CONFIG at it.
+#
+# This file is the ENTIRE client-specific surface. Nothing under server/ knows
+# about any particular client or schema.
+#
+# Do NOT list columns, row counts or enum values here. They are introspected
+# from the live database at boot and injected into the tool descriptions, so
+# they cannot go stale. Write only what introspection cannot know: business
+# meaning, and the traps that produce wrong answers.
+
+server:
+  name: shop-analytics
+  title: Shop analytics
+  # Sent to the client as MCP `instructions` — folded into the system prompt.
+  instructions: |
+    Read-only analytics for an online shop. Amounts are in minor units
+    (cents). The session timezone is already the business timezone, so
+    date_trunc('month', ordered_at) is local wall-clock — no AT TIME ZONE
+    conversion needed.
+
+    Lead with the answer in bold, then a table for grouped results, then one
+    short line naming the view, filters and time range used.
+
+    Read the execute_sql description before writing SQL: it carries the live
+    schema, the enum values, and the traps.
+
+database:
+  schema: analytics          # introspected, and used as the search_path
+
+limits:
+  max_rows: 500              # truncates and tells the model it truncated
+  statement_timeout_ms: 20000
+  pool_min: 1
+  pool_max: 4
+  # The database role is the security boundary (read-only transactions, SELECT
+  # on views only). This extra guard is off by default: a SQL validator blocks
+  # valid read-only constructs for no real gain.
+  select_only: false
+
+domain:
+  summary: |
+    Run a READ-ONLY SQL query against the shop analytics database and return
+    the rows. Amounts are integer minor units.
+
+  # The highest-value section. Every line here should be something that
+  # produces a WRONG ANSWER if the model does not know it.
+  traps: |
+    - GUEST ORDERS: customer_id '00000000-0000-0000-0000-000000000000' is a
+      single synthetic customer collecting all guest checkouts. Exclude it from
+      any distinct-customer metric or the number is badly wrong.
+    - PARTIAL CURRENT MONTH: the running month is incomplete. Never compare it
+      to full months without normalising per active day.
+    - Use `ordered_at` for time analysis; `created_at` is ingestion time.
+    - Enumerating enum values by hand and omitting one silently drops rows. Use
+      the generated list above rather than any remembered list.
+
+  not_available: |
+    customer names, email addresses, phone numbers, payment tokens, free-text
+    order notes, and the raw payment-gateway tables.
+
+tools:
+  execute_sql:
+    enabled: true
+
+  # Each entry becomes a real MCP tool with typed parameters. Parameters bind
+  # via psycopg named placeholders — never string interpolation — and min/max
+  # are enforced before binding.
+  #
+  # Build these from questions people actually ask. A named tool beats letting
+  # the model re-derive the same analysis (and re-derive it differently) each
+  # time.
+  queries:
+    monthly_trend:
+      description: |
+        Orders and revenue per calendar month for the last N months, oldest
+        first. The most recent month is PARTIAL — do not present it as a
+        decline without normalising per day or saying the month is incomplete.
+      params:
+        months:
+          type: integer
+          default: 6
+          min: 1
+          max: 36
+      sql: |
+        select to_char(date_trunc('month', ordered_at), 'YYYY-MM') as month,
+               count(*)                                            as orders,
+               sum(amount)                                         as revenue,
+               count(distinct ordered_at::date)                    as active_days,
+               round(count(*)::numeric
+                     / nullif(count(distinct ordered_at::date), 0)) as per_active_day
+        from orders
+        where ordered_at >= date_trunc('month', now())
+                          - make_interval(months => %(months)s - 1)
+        group by 1
+        order by 1
+
+    top_products:
+      description: |
+        Best-selling products by revenue over a trailing window.
+      params:
+        days:  {type: integer, default: 30, min: 1, max: 365}
+        limit: {type: integer, default: 10, min: 1, max: 50}
+      sql: |
+        select product_name,
+               sum(quantity)             as units,
+               sum(quantity * unit_price) as revenue
+        from order_items
+        join orders using (order_id)
+        where ordered_at >= now() - make_interval(days => %(days)s)
+        group by 1
+        order by revenue desc
+        limit %(limit)s

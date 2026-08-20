@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+
+# Client configs are deployment-specific — ship only the example.
+config/*.yaml
+!config/example.yaml
+skills/
