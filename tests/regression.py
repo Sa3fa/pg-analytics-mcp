@@ -90,7 +90,26 @@ def main() -> int:
 
     lv, err = call(url, "list_views")
     check("list_views announces CONTRACT VERSION", "CONTRACT VERSION:" in lv and not err)
-    check("list_views reports DATA FRESHNESS", "DATA FRESHNESS:" in lv)
+    check("list_views reports SERVER STARTED", "SERVER STARTED:" in lv)
+    check("list_views reports DATA FRESHNESS", "DATA FRESHNESS" in lv)
+
+    # A freshness value cached at boot ages into a lie and can never signal an
+    # ingestion stall — the only reason the field exists. Assert it tracks
+    # reality rather than the process start time.
+    import re as _re
+    from datetime import datetime as _dt, timezone as _tz
+    m = _re.search(r"DATA FRESHNESS[^:]*:\s*(\S+ \S+)", lv)
+    if m:
+        try:
+            seen = _dt.fromisoformat(m.group(1))
+            age = (_dt.now(_tz.utc) - seen.astimezone(_tz.utc)).total_seconds()
+            check("DATA FRESHNESS is measured live, not frozen at boot",
+                  age < 7200, f"reported value is {age/3600:.1f}h old")
+        except ValueError as exc:
+            check("DATA FRESHNESS is measured live, not frozen at boot", False, str(exc))
+    else:
+        check("DATA FRESHNESS is measured live, not frozen at boot", False,
+              "no parseable timestamp in list_views")
     check("list_views reports OBJECT KINDS", "OBJECT KINDS:" in lv)
     check("schema block is generated (enums present)", "ENUM VALUES" in lv)
 

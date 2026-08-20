@@ -7,6 +7,7 @@ bridge process, which is why there is no per-session child to leak.
 from __future__ import annotations
 
 import contextlib
+import datetime
 import hashlib
 import logging
 import os
@@ -66,7 +67,10 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
     STATE["schema"] = schema
     STATE["tools"] = register(server, CFG, DB, schema, STATE)
     STATE["version"] = _contract_version(schema.fingerprint)
-    STATE["freshness"] = await _freshness()
+    # Boot time, NOT data freshness. The schema snapshot is from this moment;
+    # data recency must be measured per call or it silently ages into a lie.
+    STATE["started"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
+        timespec="seconds")
 
     # Prove the documented privacy boundary before serving a single request.
     # A claim in a description is only a claim until something executes it.
@@ -116,7 +120,7 @@ async def introspection(request: Request) -> JSONResponse:
             "enums": sorted(getattr(schema, "enums", {}) or {}),
             "tools": STATE["tools"],
             "version": STATE.get("version"),
-            "data_freshness": STATE.get("freshness"),
+            "server_started": STATE.get("started"),
             "object_kinds": getattr(schema, "kinds", {}),
             "limits": CFG.limits.model_dump(),
         }
@@ -136,18 +140,6 @@ async def _run_assertions() -> tuple[bool, list[dict]]:
                 {"sql": sql, "result": str(exc).splitlines()[0][:160], "pass": True}
             )
     return ok, results
-
-
-async def _freshness() -> str | None:
-    if not CFG.database.freshness_query.strip():
-        return None
-    try:
-        rows, _ = await DB.fetch(CFG.database.freshness_query, cap=1)
-        if rows:
-            return str(list(rows[0].values())[0])
-    except Exception as exc:  # noqa: BLE001 — freshness is advisory
-        log.warning("freshness probe failed: %s", exc)
-    return None
 
 
 def _contract_version(schema_fingerprint: str) -> str:

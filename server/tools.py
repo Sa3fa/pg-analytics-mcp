@@ -242,11 +242,20 @@ def register(
         ]
         if cfg.server.changelog.strip():
             header.append(f"CHANGELOG: {cfg.server.changelog.strip()}")
-        fresh = state.get("freshness")
-        header.append(
-            f"DATA FRESHNESS: {fresh}" if fresh
-            else "DATA FRESHNESS: not configured — treat recency as unknown"
-        )
+        header.append(f"SERVER STARTED: {state.get('started', 'unknown')} "
+                      "(when the schema below was captured)")
+        # Measured now, not at boot. A cached value ages into a lie and can
+        # never signal an ingestion stall, which is the only reason the field
+        # exists.
+        if cfg.database.freshness_query.strip():
+            try:
+                rows, _ = await db.fetch(cfg.database.freshness_query, cap=1)
+                val = str(list(rows[0].values())[0]) if rows else "unknown"
+                header.append(f"DATA FRESHNESS (measured now): {val}")
+            except Exception as exc:  # noqa: BLE001 — advisory
+                header.append(f"DATA FRESHNESS: probe failed ({exc})")
+        else:
+            header.append("DATA FRESHNESS: not configured — treat recency as unknown")
         header.append(f"OBJECT KINDS: {kinds}")
         return "\n".join(header) + "\n\n" + schema.block()
 
