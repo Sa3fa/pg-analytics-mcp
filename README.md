@@ -173,12 +173,36 @@ that *succeeds* is a security defect, not a documentation one.
 Re-run after any change to views, grants, or config. **All five must fail:**
 
 ```sql
-update donations set amount = 0 where false;   -- permission denied for view
+update customers set city = 'x' where false;   -- permission denied for view
+update donations set amount = 0 where false;   -- cannot update view (joined, so
+                                               --   not auto-updatable — a second,
+                                               --   independent guard)
 select count(*) from public.donations;         -- permission denied for table
 select count(*) from public.website_orders;    -- permission denied for table
 create table analytics.t (id int);             -- read-only transaction
 select phone_number from customers limit 1;    -- column does not exist
 ```
+
+Two guards refuse writes and which one fires depends on the view: simple views
+hit the role's missing grant, views carrying the free-text allowlist joins are
+rejected earlier as non-updatable. Assert that a write is **refused**, not that
+it produced a particular message.
+
+## Regression suite
+
+```bash
+python3 tests/regression.py                    # against localhost:8000
+python3 tests/regression.py --url http://host:8010 --slow
+```
+
+32 behavioural assertions covering the contract surface, SQL capability,
+truncation honesty, paging soundness, the write and PII boundary, derived-tool
+stability and the timeout override. Exit code 1 on any regression.
+
+Every one of these encodes something that was established by hand and that a
+later change could silently undo — the truncation format, the ORDER BY caveat,
+the spike threshold's independence from window size. Run it after any change to
+the server, the views, or the grants.
 
 `limits.select_only` exists but defaults **off**: the role is the boundary, and
 a SQL validator on top blocks valid read-only constructs for no gain — that is
