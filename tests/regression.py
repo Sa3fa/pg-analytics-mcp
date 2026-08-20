@@ -96,20 +96,19 @@ def main() -> int:
     # A freshness value cached at boot ages into a lie and can never signal an
     # ingestion stall — the only reason the field exists. Assert it tracks
     # reality rather than the process start time.
-    import re as _re
     from datetime import datetime as _dt, timezone as _tz
-    m = _re.search(r"DATA FRESHNESS[^:]*:\s*(\S+ \S+)", lv)
-    if m:
-        try:
-            seen = _dt.fromisoformat(m.group(1))
-            age = (_dt.now(_tz.utc) - seen.astimezone(_tz.utc)).total_seconds()
-            check("DATA FRESHNESS is measured live, not frozen at boot",
-                  age < 7200, f"reported value is {age/3600:.1f}h old")
-        except ValueError as exc:
-            check("DATA FRESHNESS is measured live, not frozen at boot", False, str(exc))
-    else:
+    # Match the FIELD, not any prose that happens to mention it — the changelog
+    # legitimately contains the words "DATA FRESHNESS".
+    line = next((l for l in lv.splitlines() if l.startswith("DATA FRESHNESS")), "")
+    value = line.split(":", 1)[1].strip() if ":" in line else ""
+    try:
+        seen = _dt.fromisoformat(value)
+        age = (_dt.now(_tz.utc) - seen.astimezone(_tz.utc)).total_seconds()
+        check("DATA FRESHNESS is measured live, not frozen at boot",
+              age < 7200, f"reported value is {age / 3600:.1f}h old — cached?")
+    except ValueError:
         check("DATA FRESHNESS is measured live, not frozen at boot", False,
-              "no parseable timestamp in list_views")
+              f"unparseable: {value!r}")
     check("list_views reports OBJECT KINDS", "OBJECT KINDS:" in lv)
     check("schema block is generated (enums present)", "ENUM VALUES" in lv)
 
