@@ -1,7 +1,13 @@
-# analytics-mcp
+# pg-analytics-mcp
 
-A read-only, PII-free Postgres MCP server for Claude, designed to sit behind
-Cloudflare Access on a VPS running `cloudflared` → traefik.
+A **config-driven, read-only Postgres MCP server for Claude**. Expose a
+Postgres schema to Claude over Streamable HTTP, with schema and enum values
+introspected from the live database at boot, and everything client-specific in
+a single YAML file.
+
+Designed to run **behind Cloudflare Access** on a `cloudflared` → reverse-proxy
+stack (a full provisioning playbook is included), but the server itself has no
+Cloudflare dependency and runs anywhere.
 
 **Client-agnostic.** Nothing under `server/` knows about any particular client.
 To serve a new one: copy the repo, write a config file, set `.env`.
@@ -152,3 +158,7 @@ why `postgres-mcp`'s restricted mode was abandoned.
   connection attribution through the pooler is not possible.
 - **MCP SDK 2.0 renamed `FastMCP` to `MCPServer`** and moved it out of
   `mcp.server.fastmcp`. `requirements.txt` is a full lock for that reason.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
