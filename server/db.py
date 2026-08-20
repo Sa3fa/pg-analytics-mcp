@@ -75,18 +75,39 @@ class Database:
             self._pool = None
 
     async def fetch(
-        self, sql: str, params: dict[str, Any] | None = None, *, cap: int | None = None
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        cap: int | None = None,
+        timeout_ms: int | None = None,
     ) -> tuple[list[dict[str, Any]], bool]:
-        """Run a query. Returns (rows, truncated)."""
+        """Run a query. Returns (rows, truncated).
+
+        `truncated` is True when more rows exist than `cap` — we fetch cap+1 so
+        the caller can say so honestly instead of silently returning a partial
+        answer that looks complete.
+        """
         if self._pool is None:
             raise RuntimeError("pool is not open")
         cap = self._cfg.limits.max_rows if cap is None else cap
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, params or None)
-                if cur.description is None:
-                    return [], False
-                rows = await cur.fetchmany(cap + 1)
+                if timeout_ms is not None:
+                    await cur.execute(f"set statement_timeout = {int(timeout_ms)}")
+                try:
+                    await cur.execute(sql, params or None)
+                    if cur.description is None:
+                        return [], False
+                    rows = await cur.fetchmany(cap + 1)
+                finally:
+                    if timeout_ms is not None:
+                        # Connections are pooled and reused — never leave a
+                        # caller's override applied to the next query.
+                        await cur.execute(
+                            "set statement_timeout = "
+                            f"{int(self._cfg.limits.statement_timeout_ms)}"
+                        )
         truncated = len(rows) > cap
         return rows[:cap], truncated
 
@@ -113,16 +134,28 @@ def _jsonable(obj: Any) -> Any:
     return str(obj)
 
 
-def render_rows(rows: list[dict[str, Any]], truncated: bool, cap: int) -> str:
-    """Format rows for the model, and be explicit when output was cut."""
+def render_rows(
+    rows: list[dict[str, Any]],
+    truncated: bool,
+    cap: int,
+    *,
+    offset: int = 0,
+) -> str:
+    """Format rows for the model, and be explicit about what was withheld."""
     if not rows:
-        return "No rows returned."
+        return f"No rows returned. (rows_returned=0, offset={offset})"
     body = "\n".join(
         json.dumps(dict(r), default=_jsonable, ensure_ascii=False) for r in rows
     )
+    n = len(rows)
     if truncated:
         body += (
-            f"\n\n[TRUNCATED — only the first {cap} rows are shown. "
-            "Narrow the query or aggregate; do not present this as a complete result.]"
+            f"\n\n[rows_returned={n}, offset={offset}, rows_total>={offset + n + 1} "
+            f"— TRUNCATED at the {cap}-row cap. The real total is unknown and may be "
+            "far larger. Either aggregate instead, or page with offset="
+            f"{offset + n}. Do not present this as a complete result.]"
         )
+    else:
+        total = offset + n
+        body += f"\n\n[rows_returned={n}, offset={offset}, rows_total={total} — complete]"
     return body

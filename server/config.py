@@ -57,6 +57,8 @@ class DatabaseCfg(BaseModel):
 class LimitsCfg(BaseModel):
     max_rows: int = 500
     statement_timeout_ms: int = 20_000
+    # Callers may raise the timeout per query up to this ceiling.
+    statement_timeout_max_ms: int = 120_000
     pool_min: int = 1
     pool_max: int = 4
     # The database role is the security boundary (read-only transactions, SELECT
@@ -69,6 +71,9 @@ class DomainCfg(BaseModel):
     summary: str = ""
     traps: str = ""
     not_available: str = ""
+    # Each entry is SQL that MUST fail. Proves the not_available prose is true
+    # rather than merely asserted. Run via GET /selftest.
+    not_available_assertions: list[str] = Field(default_factory=list)
 
 
 class ParamCfg(BaseModel):
@@ -112,10 +117,22 @@ class QueryToolCfg(BaseModel):
 class ExecuteSqlCfg(BaseModel):
     enabled: bool = True
     extra: str = ""
+    # How much generated schema to embed in the tool description.
+    #   full    — objects, columns, row counts, enums (best for small schemas)
+    #   compact — object names + row counts + enums only
+    #   none    — omit; the model must call list_views first
+    # On a 60-table schema `full` costs thousands of tokens in every
+    # conversation, so large deployments should use compact.
+    schema_detail: Literal["full", "compact", "none"] = "full"
+
+
+class ExplainCfg(BaseModel):
+    enabled: bool = True
 
 
 class ToolsCfg(BaseModel):
     execute_sql: ExecuteSqlCfg = Field(default_factory=ExecuteSqlCfg)
+    explain_query: ExplainCfg = Field(default_factory=ExplainCfg)
     queries: dict[str, QueryToolCfg] = Field(default_factory=dict)
 
 

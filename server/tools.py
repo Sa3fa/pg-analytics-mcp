@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+import psycopg
 from mcp.server.mcpserver import MCPServer
 
 from .config import Config, QueryToolCfg
@@ -36,7 +37,8 @@ def execute_sql_description(cfg: Config, schema: Schema) -> str:
 
     parts.append(
         f"SCOPE — only schema `{schema.name}` is visible, and it is the search_path, so\n"
-        f"unqualified names resolve there. Objects available:\n\n{schema.block()}"
+        "unqualified names resolve there. Objects available:\n\n"
+        f"{schema.block(cfg.tools.execute_sql.schema_detail)}"
     )
 
     parts.append(
@@ -45,9 +47,14 @@ def execute_sql_description(cfg: Config, schema: Schema) -> str:
         "2. NEVER invent table, column or enum values — the lists above are generated\n"
         "   from the live database, so trust them over any other source.\n"
         "3. Report only values this tool returns. Empty result = say so; never fabricate.\n"
-        f"4. statement_timeout is {cfg.limits.statement_timeout_ms // 1000}s — bound large scans by date.\n"
-        f"5. At most {cfg.limits.max_rows} rows are returned; output says so when truncated.\n"
-        "   Prefer aggregates over dumping rows."
+        f"4. statement_timeout is {cfg.limits.statement_timeout_ms // 1000}s — bound large scans\n"
+        f"   by date. Pass timeout_ms to raise it for one query (max "
+        f"{cfg.limits.statement_timeout_max_ms // 1000}s).\n"
+        f"5. At most {cfg.limits.max_rows} rows are returned. Every result reports\n"
+        "   rows_returned and rows_total; when truncated, rows_total is a LOWER BOUND\n"
+        "   and the real count is unknown. Either aggregate, or page with limit/offset.\n"
+        "6. explain_query(sql) shows the plan without running the query — use it before\n"
+        "   a scan you expect to be expensive."
     )
 
     if cfg.domain.traps.strip():
@@ -64,6 +71,40 @@ def execute_sql_description(cfg: Config, schema: Schema) -> str:
         parts.append(cfg.tools.execute_sql.extra.strip())
 
     return "\n\n".join(parts)
+
+
+def _paginate(sql: str, limit: int | None, offset: int) -> str:
+    """Wrap a query for paging without parsing it."""
+    if limit is None and not offset:
+        return sql
+    inner = sql.strip().rstrip(";")
+    lim = f"limit {int(limit)}" if limit is not None else ""
+    off = f"offset {int(offset)}" if offset else ""
+    return f"select * from (\n{inner}\n) as _page {lim} {off}".strip()
+
+
+def _schema_hint(exc: Exception, schema: Schema) -> str:
+    """Turn a bare 'column does not exist' into something actionable.
+
+    Postgres supplies a HINT only when a close match exists in scope; for a
+    typo far from any real name it says nothing at all, which leaves the caller
+    guessing. Append the columns of whichever known objects the query mentions.
+    """
+    state = getattr(exc, "sqlstate", None)
+    if state not in ("42703", "42P01"):  # undefined_column, undefined_table
+        return ""
+    text = str(exc).lower()
+    mentioned = [o for o in schema.objects if o.lower() in text]
+    if not mentioned:
+        return (
+            "\n\nObjects available in this schema: "
+            + ", ".join(sorted(schema.objects))
+            + "\nCall describe_view(name) for its columns."
+        )
+    out = ["\n\nColumns actually available:"]
+    for obj in mentioned[:4]:
+        out.append(f"  {obj}({', '.join(schema.objects[obj])})")
+    return "\n".join(out)
 
 
 def _guard(sql: str) -> None:
@@ -118,14 +159,58 @@ def register(server: MCPServer, cfg: Config, db: Database, schema: Schema) -> li
     if cfg.tools.execute_sql.enabled:
         desc = execute_sql_description(cfg, schema)
 
-        async def execute_sql(sql: str) -> str:
+        async def execute_sql(
+            sql: str,
+            limit: int | None = None,
+            offset: int = 0,
+            timeout_ms: int | None = None,
+        ) -> str:
             if cfg.limits.select_only:
                 _guard(sql)
-            rows, truncated = await db.fetch(sql)
-            return render_rows(rows, truncated, cfg.limits.max_rows)
+            if timeout_ms is not None:
+                timeout_ms = max(
+                    1_000, min(int(timeout_ms), cfg.limits.statement_timeout_max_ms)
+                )
+            offset = max(0, int(offset))
+            cap = cfg.limits.max_rows if limit is None else min(int(limit), cfg.limits.max_rows)
+            try:
+                # Fetch cap+1 so truncation is detectable. Without the +1 an
+                # explicit limit would always look "complete", because the
+                # wrapper would hide the very row that proves there are more.
+                rows, truncated = await db.fetch(
+                    _paginate(sql, None if limit is None else cap + 1, offset),
+                    cap=cap,
+                    timeout_ms=timeout_ms,
+                )
+            except psycopg.Error as exc:
+                raise ValueError(f"{exc}{_schema_hint(exc, schema)}") from exc
+            return render_rows(rows, truncated, cap, offset=offset)
 
         server.add_tool(execute_sql, name="execute_sql", description=desc)
         registered.append("execute_sql")
+
+    if cfg.tools.explain_query.enabled:
+
+        async def explain_query(sql: str) -> str:
+            """Show the plan without executing the query."""
+            try:
+                rows, _ = await db.fetch(f"explain (format text) {sql.strip().rstrip(';')}",
+                                         cap=200)
+            except psycopg.Error as exc:
+                raise ValueError(f"{exc}{_schema_hint(exc, schema)}") from exc
+            return "\n".join(str(list(r.values())[0]) for r in rows) or "(no plan)"
+
+        server.add_tool(
+            explain_query,
+            name="explain_query",
+            description=(
+                "Return the Postgres query plan for a SELECT without running it "
+                "(EXPLAIN, never ANALYZE — nothing is executed and no rows are read). "
+                "Use it before a scan you expect to be expensive, or to check whether "
+                "a filter uses an index rather than a sequential scan."
+            ),
+        )
+        registered.append("explain_query")
 
     async def list_views() -> str:
         """List the objects this connector can read, with their columns."""
@@ -142,7 +227,7 @@ def register(server: MCPServer, cfg: Config, db: Database, schema: Schema) -> li
     )
     registered.append("list_views")
 
-    async def describe_view(name: str) -> str:
+    async def describe_view(name: str) -> str:  # noqa: D401
         """Columns of a single object."""
         cols = schema.columns_of(name)
         if cols is None:

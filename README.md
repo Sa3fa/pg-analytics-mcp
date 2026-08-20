@@ -76,10 +76,24 @@ stale. Write only what introspection cannot know — business meaning and traps.
 
 Built-in:
 
-- **`execute_sql(sql)`** — raw read-only SQL. Its description is assembled at
-  boot from your authored prose *plus* the generated schema and enum lists.
+- **`execute_sql(sql, limit=, offset=, timeout_ms=)`** — raw read-only SQL. Its
+  description is assembled at boot from your authored prose *plus* the generated
+  schema and enum lists. Every result reports `rows_returned` and `rows_total`;
+  when truncated, `rows_total` is stated as a **lower bound** rather than
+  silently returning a partial answer that looks complete. `timeout_ms` raises
+  the statement timeout for one query, clamped to
+  `limits.statement_timeout_max_ms` and reset afterwards so it cannot leak onto
+  a pooled connection.
+- **`explain_query(sql)`** — the plan, without executing anything. `EXPLAIN`,
+  never `ANALYZE`.
 - **`list_views()`** — every readable object with columns, row counts, enums.
 - **`describe_view(name)`** — columns of one object.
+
+**Errors are made actionable.** On `undefined_column` / `undefined_table` the
+server appends the real column list for whichever known objects the query
+mentioned. Postgres supplies a `HINT` only when a close match exists; for a typo
+far from any real name it says nothing, and that silence is what leaves a caller
+guessing.
 
 Config-defined: every entry under `tools.queries` becomes a real MCP tool with
 typed parameters. Parameters bind via psycopg named placeholders — never string
@@ -112,9 +126,25 @@ Half of each description is authored (judgement), half generated (facts). The
 generated half is why the `boxy` platform/processor and `daily` frequency can no
 longer go missing the way they did in the hand-written prompt that preceded this.
 
+## Large schemas
+
+`tools.execute_sql.schema_detail` controls how much generated schema rides in
+the tool description, which is loaded into **every** conversation:
+
+| Value | Contents | Use when |
+| --- | --- | --- |
+| `full` (default) | objects, columns, row counts, enums | small schemas — best accuracy |
+| `compact` | object names, row counts, enums | large schemas; columns via `describe_view` |
+| `none` | nothing | the model must call `list_views` first |
+
+Six views cost ~1,000 tokens, which is a cheap insurance premium against
+hallucinated column names. Sixty tables would cost ten times that in every
+conversation — switch to `compact` there.
+
 ## Operations
 
 ```bash
+curl -s localhost:8000/selftest      | python3 -m json.tool   # privacy boundary assertions
 curl -s localhost:8000/introspection | python3 -m json.tool   # objects, enums, tools, limits
 docker top <container>                                        # must stay at 1 process
 docker compose up -d --build                                  # after a config edit
@@ -122,6 +152,21 @@ docker compose up -d --build                                  # after a config e
 
 A config or schema change needs a restart — introspection is cached for the
 process lifetime, deliberately, so behaviour cannot drift mid-run.
+
+## Proving the privacy boundary
+
+`domain.not_available_assertions` is a list of statements that **must fail**.
+`GET /selftest` runs them and returns HTTP 500 if any succeeds:
+
+```json
+{"pass": true, "checked": 13,
+ "assertions": [{"sql": "select display_name from customers limit 1",
+                 "result": "column \"display_name\" does not exist", "pass": true}]}
+```
+
+Documentation claiming a column is unreachable is only a claim. This turns it
+into a test — run it in CI, or after any change to views or grants. A statement
+that *succeeds* is a security defect, not a documentation one.
 
 ## The five boundary tests
 

@@ -98,6 +98,30 @@ async def introspection(request: Request) -> JSONResponse:
     )
 
 
+async def selftest(request: Request) -> JSONResponse:
+    """Prove the NOT-AVAILABLE claims instead of merely asserting them.
+
+    Each configured statement MUST fail. A statement that succeeds means the
+    documented privacy boundary is wrong — which is a security defect, not a
+    documentation one.
+    """
+    results = []
+    ok = True
+    for sql in CFG.domain.not_available_assertions:
+        try:
+            await DB.fetch(sql, cap=1)
+            results.append({"sql": sql, "result": "SUCCEEDED", "pass": False})
+            ok = False
+        except Exception as exc:  # noqa: BLE001 — failing is the pass condition
+            results.append(
+                {"sql": sql, "result": str(exc).splitlines()[0][:160], "pass": True}
+            )
+    return JSONResponse(
+        {"pass": ok, "checked": len(results), "assertions": results},
+        status_code=200 if ok else 500,
+    )
+
+
 mcp_app = server.streamable_http_app(
     streamable_http_path="/mcp",
     stateless_http=True,  # no per-session state; the shared pool holds what matters
@@ -114,6 +138,7 @@ app = Starlette(
     routes=[
         Route("/healthz", healthz, methods=["GET"]),
         Route("/introspection", introspection, methods=["GET"]),
+        Route("/selftest", selftest, methods=["GET"]),
         Mount("/", app=mcp_app),
     ],
     lifespan=lifespan,

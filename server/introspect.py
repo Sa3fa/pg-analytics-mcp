@@ -64,8 +64,26 @@ class Schema:
     enums: dict[str, str] = field(default_factory=dict)
     est_rows: dict[str, int] = field(default_factory=dict)
 
-    def block(self) -> str:
-        """The schema section injected into tool descriptions."""
+    def block(self, detail: str = "full") -> str:
+        """The schema section injected into tool descriptions.
+
+        `compact` drops column lists — on a large schema the full listing costs
+        thousands of tokens in every conversation, and list_views serves it on
+        demand instead.
+        """
+        if detail == "none":
+            return "  (call list_views for the schema)"
+        if detail == "compact":
+            lines = []
+            for obj in self.objects:
+                size = self.est_rows.get(obj)
+                lines.append(f"  {obj}{f'   {_human(size)}' if size else ''}")
+            out = "\n".join(lines)
+            out += "\n  (columns omitted — call describe_view(name) or list_views)"
+            if self.enums:
+                out += "\n\nENUM VALUES (generated from the live database):\n"
+                out += "\n".join(f"  {k}: {v}" for k, v in self.enums.items())
+            return out
         lines: list[str] = []
         for obj, cols in self.objects.items():
             size = self.est_rows.get(obj)

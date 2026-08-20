@@ -58,6 +58,11 @@ domain:
     customer names, email addresses, phone numbers, payment tokens, free-text
     order notes, and the raw payment-gateway tables.
 
+  # Each statement MUST fail. Verified by GET /selftest.
+  not_available_assertions:
+    - select customer_email from orders limit 1
+    - select count(*) from public.orders
+
 tools:
   execute_sql:
     enabled: true
