@@ -7,4 +7,3 @@ __pycache__/
 # Client configs are deployment-specific — ship only the example.
 config/*.yaml
 !config/example.yaml
-skills/

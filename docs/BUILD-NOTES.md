@@ -261,3 +261,18 @@ The lesson generalises: an analytics connector that only answers questions puts
 the entire burden of noticing on whoever happens to be looking. Encoding "what
 would surprise me" as checks moves that burden into the server, and costs a few
 lines of YAML per check.
+
+## 11. The skill was deleted
+
+A Claude skill and a project-instructions document were written early, before
+the server carried its own descriptions. Both were removed once the server did.
+
+Measured before deleting, the skill was already stale on five of nine checks —
+missing the free-text allowlisting, the sentinel cutoff, `data_health`,
+`timeout_ms` and the identity-vs-analysis distinction — and it hardcoded the
+`boxy` enum value that the server now generates from `pg_enum`. One day of
+drift, in the file whose whole purpose was to be authoritative.
+
+Anything that must reach the model belongs in `server.instructions` (behaviour),
+the tool description (facts, half generated), or `list_views` (live contract).
+A second copy is a second thing to forget.

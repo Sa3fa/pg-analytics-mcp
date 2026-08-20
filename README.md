@@ -148,6 +148,27 @@ check is silent until it matters. On first run against the live WHF data this
 surfaced 4,350 overdue subscriptions worth 17.4M IQD per cycle — a finding no
 amount of correct query answering would have produced.
 
+## No skill, no context document — deliberately
+
+Earlier versions of this project shipped a Claude skill and a "paste into
+project instructions" document carrying the same domain knowledge. Both were
+deleted.
+
+Within a day the skill had drifted: it was missing the free-text allowlisting,
+the anonymous-sentinel cutoff date, `data_health`, `timeout_ms` and the
+"still answerable" guidance — and it **hardcoded an enum value** that the server
+now introspects. That is the exact failure this design exists to prevent,
+recreated in a second file.
+
+A parallel copy of the truth is a copy that will disagree with the truth. If
+something needs to reach the model, put it in the server: `server.instructions`
+for behaviour, the tool description for facts, `list_views` for the live
+contract. All three travel with every conversation and cannot go stale, because
+half of each is generated at boot.
+
+For the same reason there is no "fetch the documentation" tool. A tool requires
+a call the model may not make; a description is simply present.
+
 ## Why descriptions live here
 
 Tool descriptions are the one context a model sees **whenever the tool is
