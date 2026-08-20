@@ -187,3 +187,30 @@ Deliberately **not** installing hypopg or pg_stat_statements: those tools would
 analyse `public` tables this role cannot read, and any index they recommended
 would have to be created by someone else. Index tuning belongs to whoever owns
 the base tables, not to a read-only analytics connector.
+
+## 8. Three separate redirect-URI layers
+
+Per-user portal access failed with `invalid_request: Redirect URI not allowed
+by application configuration` even though the URI was in the application's
+allowlist. Three distinct things were being confused:
+
+1. **Application allowlist** — what dynamic client registration will *accept*.
+2. **Client registration** — the `redirect_uris` fixed on a specific client
+   when it was created. Authorization validates against **this**.
+3. **Access policy** — who may authorize at all.
+
+The client had been registered during admin authentication with a single
+`dash.cloudflare.com` callback. Adding the portal callback to the application
+allowlist could not retroactively change it, so every end-user authorization
+was rejected while admin authentication kept working.
+
+Fix: enable the Cloudflare-hosted (shared) callback and re-authenticate, which
+registers a **new** client with one URL that both flows use.
+
+A follow-on `Invalid state: missing or invalid nonce` was leftover state from
+the earlier failed attempts — each attempt issues a new nonce, and returning
+with a stale one fails. Cleared by one clean pass with fresh cookies.
+
+**Diagnostic caveat:** the DCR probe in the playbook tests layer 1 only. It
+reported the portal callback as allowed while authorization rejected it. Useful
+tool, wrong layer — confirm the real flow before concluding.

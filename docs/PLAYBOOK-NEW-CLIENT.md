@@ -232,7 +232,7 @@ Access → AI Controls → MCP servers → **Add an MCP server**:
 
 - URL: `https://ORIGIN_HOST/mcp` — **full URL with scheme and `/mcp` path**
 - OAuth credentials: **Automatic**
-- Use Cloudflare-hosted OAuth callback: **OFF**
+- Use Cloudflare-hosted OAuth callback: **ON** (see below)
 - Route outbound through Gateway: **OFF**
 - Attach an **Allow** policy with `ADMIN_EMAIL`
 
@@ -245,6 +245,14 @@ https://dash.cloudflare.com/<account>/one/access-controls/ai-controls/mcp-server
 
 Add that exact URL to the **origin** app's Allowed redirect URIs (Phase 4),
 wait ~1 minute for propagation, then click **Authenticate now** again.
+
+**Turn the Cloudflare-hosted (shared) callback ON.** With it off, admin
+authentication registers a client whose only redirect URI is the
+`dash.cloudflare.com` one — so *end users* clicking the server in the portal
+are rejected, because their flow sends the portal's callback instead. The
+shared callback gives both flows one fixed URL and one client registration.
+Allowlist all three URIs (shared, portal, dash) and leave them there: pruning
+to one is what breaks per-user auth.
 
 ### ✅ Gate 6 — the DCR oracle
 
@@ -260,6 +268,14 @@ curl -s -X POST https://<team>.cloudflareaccess.com/cdn-cgi/access/oauth/registr
 
 `client_id` returned = allowed. `invalid_client_metadata` = not allowed.
 Propagation takes up to a minute, so retry before concluding it failed.
+
+> **It only tests one of three layers.** This endpoint validates the
+> **account/application allowlist** — what dynamic registration will *accept*.
+> It does **not** tell you whether an authorization request will succeed.
+> Authorization validates `redirect_uri` against the **already-registered
+> client's** own `redirect_uris`, which were fixed when that client was
+> created. A URI can pass this probe and still be rejected at authorization.
+> Only running the real flow proves that path.
 
 > Each probe creates a **real OAuth client that cannot be deleted** — Cloudflare
 > issues no registration access token and `DELETE` returns 404. Probe
@@ -311,6 +327,9 @@ Ask Claude:
 | `No allowed servers available` | Server not authenticated, or no Allow policy on the **server** | Authenticate; policies are per-portal *and* per-server |
 | Server stuck `Waiting`, 0 tools | Registered `/sse`, or origin unreachable | Use `/mcp`; check DNS actually resolves |
 | Works ~9 calls then all fail, incl. `SELECT 1` | Connection leak (see below) | Restart; lower `--sessionTimeout` |
+| `Redirect URI not allowed by application configuration` (after allowlisting it) | The **registered client** is stale — its `redirect_uris` were fixed at registration | Enable the shared callback and click **Authenticate now** to register a new client |
+| `Invalid state: missing or invalid nonce` | Stale state from earlier failed attempts | Clear cookies for the portal and `*.cloudflareaccess.com`, retry once in a single uninterrupted pass |
+| Admin works, end users get authorization errors | Admin and per-user flows use different callbacks | Shared callback ON, re-authenticate |
 | `Error validating query` | Restricted-mode SQL validator rejects a valid read-only construct (e.g. `AT TIME ZONE`) | Use `--access-mode=unrestricted` — the role is the real boundary; verify with the write/PII tests below |
 
 ---
