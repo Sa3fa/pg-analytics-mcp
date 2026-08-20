@@ -154,7 +154,15 @@ def render_rows(
         # without one Postgres may return rows in a different order per call,
         # so pages can silently skip or duplicate rows.
         if ordered:
-            advice = f"page with offset={offset + n}"
+            # Detecting the keyword is not the same as proving the order is
+            # TOTAL. `order by donated_at` still ties, and tied rows may be
+            # returned in a different order per call — so the caveat is stated
+            # unconditionally rather than inferred.
+            advice = (
+                f"page with offset={offset + n} — but ONLY if your ORDER BY is "
+                "total (ties broken by a unique column such as id); a non-unique "
+                "sort still lets tied rows move between pages"
+            )
         else:
             advice = (
                 "add a total ORDER BY before paging — without one, offset paging "

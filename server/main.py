@@ -7,8 +7,10 @@ bridge process, which is why there is no per-session child to leak.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
+import pathlib
 from collections.abc import AsyncIterator
 
 from mcp.server.mcpserver import MCPServer
@@ -62,7 +64,27 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
     await DB.open()
     schema: Schema = await introspect(DB, CFG.database.schema_name)
     STATE["schema"] = schema
-    STATE["tools"] = register(server, CFG, DB, schema)
+    STATE["tools"] = register(server, CFG, DB, schema, STATE)
+    STATE["version"] = _contract_version(schema.fingerprint)
+    STATE["freshness"] = await _freshness()
+
+    # Prove the documented privacy boundary before serving a single request.
+    # A claim in a description is only a claim until something executes it.
+    if CFG.domain.not_available_assertions:
+        ok, results = await _run_assertions()
+        failed = [r["sql"] for r in results if not r["pass"]]
+        if ok:
+            log.info("startup assertions: %d/%d pass", len(results), len(results))
+        else:
+            log.error(
+                "PRIVACY BOUNDARY BROKEN — these should have failed but succeeded: %s",
+                "; ".join(failed),
+            )
+            if CFG.limits.assertions_fail_closed:
+                raise RuntimeError(
+                    "refusing to serve: not_available assertions succeeded: "
+                    + "; ".join(failed)
+                )
     STATE["ready"] = True
     log.info("ready — MCP on /mcp, allowed hosts: %s", ", ".join(_allowed_hosts()))
     try:
@@ -93,20 +115,17 @@ async def introspection(request: Request) -> JSONResponse:
             "objects": sorted(getattr(schema, "objects", {}) or {}),
             "enums": sorted(getattr(schema, "enums", {}) or {}),
             "tools": STATE["tools"],
+            "version": STATE.get("version"),
+            "data_freshness": STATE.get("freshness"),
+            "object_kinds": getattr(schema, "kinds", {}),
             "limits": CFG.limits.model_dump(),
         }
     )
 
 
-async def selftest(request: Request) -> JSONResponse:
-    """Prove the NOT-AVAILABLE claims instead of merely asserting them.
-
-    Each configured statement MUST fail. A statement that succeeds means the
-    documented privacy boundary is wrong — which is a security defect, not a
-    documentation one.
-    """
-    results = []
-    ok = True
+async def _run_assertions() -> tuple[bool, list[dict]]:
+    """Each statement MUST fail. A success means the privacy boundary is broken."""
+    results, ok = [], True
     for sql in CFG.domain.not_available_assertions:
         try:
             await DB.fetch(sql, cap=1)
@@ -116,6 +135,43 @@ async def selftest(request: Request) -> JSONResponse:
             results.append(
                 {"sql": sql, "result": str(exc).splitlines()[0][:160], "pass": True}
             )
+    return ok, results
+
+
+async def _freshness() -> str | None:
+    if not CFG.database.freshness_query.strip():
+        return None
+    try:
+        rows, _ = await DB.fetch(CFG.database.freshness_query, cap=1)
+        if rows:
+            return str(list(rows[0].values())[0])
+    except Exception as exc:  # noqa: BLE001 — freshness is advisory
+        log.warning("freshness probe failed: %s", exc)
+    return None
+
+
+def _contract_version(schema_fingerprint: str) -> str:
+    """Declared version + a fingerprint of config and live schema.
+
+    Moves whenever the contract actually changes, even if nobody bumps the
+    declared version — which is what makes it trustworthy to a client.
+    """
+    try:
+        cfg_bytes = pathlib.Path(os.environ.get("MCP_CONFIG", "")).read_bytes()
+    except Exception:  # noqa: BLE001
+        cfg_bytes = b""
+    h = hashlib.sha256(cfg_bytes).hexdigest()[:8]
+    return f"{CFG.server.version}+cfg.{h}+schema.{schema_fingerprint}"
+
+
+async def selftest(request: Request) -> JSONResponse:
+    """Prove the NOT-AVAILABLE claims instead of merely asserting them.
+
+    Each configured statement MUST fail. A statement that succeeds means the
+    documented privacy boundary is wrong — which is a security defect, not a
+    documentation one.
+    """
+    ok, results = await _run_assertions()
     return JSONResponse(
         {"pass": ok, "checked": len(results), "assertions": results},
         status_code=200 if ok else 500,

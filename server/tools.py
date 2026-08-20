@@ -162,8 +162,15 @@ def _make_query_fn(
     return fn
 
 
-def register(server: MCPServer, cfg: Config, db: Database, schema: Schema) -> list[str]:
+def register(
+    server: MCPServer,
+    cfg: Config,
+    db: Database,
+    schema: Schema,
+    state: dict[str, Any] | None = None,
+) -> list[str]:
     registered: list[str] = []
+    state = state if state is not None else {}
 
     if cfg.tools.execute_sql.enabled:
         desc = execute_sql_description(cfg, schema)
@@ -225,7 +232,23 @@ def register(server: MCPServer, cfg: Config, db: Database, schema: Schema) -> li
 
     async def list_views() -> str:
         """List the objects this connector can read, with their columns."""
-        return schema.block()
+        kinds = ", ".join(
+            f"{o}={schema.kinds.get(o, '?')}" for o in sorted(schema.objects)
+        )
+        header = [
+            f"CONTRACT VERSION: {state.get('version', 'unknown')}",
+            "  (changes whenever the config or live schema changes — if this "
+            "differs from what you saw earlier, re-read the tool descriptions)",
+        ]
+        if cfg.server.changelog.strip():
+            header.append(f"CHANGELOG: {cfg.server.changelog.strip()}")
+        fresh = state.get("freshness")
+        header.append(
+            f"DATA FRESHNESS: {fresh}" if fresh
+            else "DATA FRESHNESS: not configured — treat recency as unknown"
+        )
+        header.append(f"OBJECT KINDS: {kinds}")
+        return "\n".join(header) + "\n\n" + schema.block()
 
     server.add_tool(
         list_views,

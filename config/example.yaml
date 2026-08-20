@@ -9,6 +9,10 @@
 # meaning, and the traps that produce wrong answers.
 
 server:
+  # Announced in list_views so a client can notice the contract changed.
+  version: "1"
+  changelog: >-
+    initial
   name: shop-analytics
   title: Shop analytics
   # Sent to the client as MCP `instructions` — folded into the system prompt.
@@ -25,6 +29,9 @@ server:
     schema, the enum values, and the traps.
 
 database:
+  # One timestamp = how current the data is. Without it, every number the
+  # model reports carries an unstated freshness assumption.
+  freshness_query: select max(ordered_at) from orders
   schema: analytics          # introspected, and used as the search_path
 
 limits:

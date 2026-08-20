@@ -42,7 +42,10 @@ order by t.typname
 # reltuples is an estimate, which is what we want — cheap and good enough to
 # tell the model "this table is large, bound your scans".
 _ROWS_SQL = """
-select c.relname as name, greatest(c.reltuples, 0)::bigint as est_rows
+select c.relname as name, greatest(c.reltuples, 0)::bigint as est_rows,
+       case c.relkind when 'v' then 'view' when 'm' then 'materialized view'
+                      when 'r' then 'table' when 'p' then 'partitioned table'
+                      else c.relkind::text end as kind
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = %(schema)s and c.relkind in ('r', 'v', 'm', 'p')
@@ -63,6 +66,8 @@ class Schema:
     objects: dict[str, list[str]] = field(default_factory=dict)
     enums: dict[str, str] = field(default_factory=dict)
     est_rows: dict[str, int] = field(default_factory=dict)
+    kinds: dict[str, str] = field(default_factory=dict)   # view / materialized view / table
+    fingerprint: str = ""
 
     def block(self, detail: str = "full") -> str:
         """The schema section injected into tool descriptions.
@@ -114,6 +119,7 @@ async def introspect(db: Database, schema_name: str) -> Schema:
     rows, _ = await db.fetch(_ROWS_SQL, {"schema": schema_name}, cap=500)
     for r in rows:
         schema.est_rows[r["name"]] = int(r["est_rows"])
+        schema.kinds[r["name"]] = r["kind"]
 
     # reltuples is meaningless for views, and an analytics schema is usually all
     # views — so fall back to a real count for anything that reported nothing.
@@ -127,6 +133,12 @@ async def introspect(db: Database, schema_name: str) -> Schema:
                 schema.est_rows[obj] = int(counted[0]["n"])
         except Exception as exc:  # noqa: BLE001 — size hints are best-effort
             log.warning("row count for %s skipped: %s", obj, exc)
+
+    import hashlib
+    sig = "|".join(
+        f"{o}:{','.join(c)}" for o, c in sorted(schema.objects.items())
+    ) + "||" + "|".join(f"{k}={v}" for k, v in sorted(schema.enums.items()))
+    schema.fingerprint = hashlib.sha256(sig.encode()).hexdigest()[:12]
 
     log.info(
         "introspected schema %s: %d objects, %d enums",

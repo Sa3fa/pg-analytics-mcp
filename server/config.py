@@ -24,6 +24,11 @@ class ServerCfg(BaseModel):
     name: str
     title: str | None = None
     instructions: str = ""
+    # Announced to clients so an agent can notice the contract changed instead
+    # of trusting a stale mental model. Combined with an auto fingerprint of
+    # the config + live schema, so it moves even if you forget to bump it.
+    version: str = "0"
+    changelog: str = ""
     # The SDK enables DNS-rebinding protection by default, which rejects any
     # Host header it does not recognise. Behind a reverse proxy the forwarded
     # Host is the public hostname, so it must be allowed explicitly.
@@ -43,6 +48,10 @@ class ServerCfg(BaseModel):
 class DatabaseCfg(BaseModel):
     schema_name: str = Field(alias="schema")
     uri_env: str = "DATABASE_URI"
+    # Optional: SQL returning ONE timestamp = how current the data is. Without
+    # it every number the model reports carries an unstated freshness
+    # assumption.
+    freshness_query: str = ""
 
     model_config = {"populate_by_name": True}
 
@@ -65,6 +74,9 @@ class LimitsCfg(BaseModel):
     # on views only). This guard is a convenience, not a control, and is off by
     # default — a SQL validator is exactly what we removed from postgres-mcp.
     select_only: bool = False
+    # If a not_available assertion SUCCEEDS at startup the privacy boundary is
+    # broken; refuse to serve rather than quietly misleading callers.
+    assertions_fail_closed: bool = True
 
 
 class DomainCfg(BaseModel):
