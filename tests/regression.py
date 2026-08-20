@@ -80,7 +80,8 @@ def main() -> int:
     print("contract")
     tl = tools(url)
     names = {t["name"] for t in tl}
-    for required in ("execute_sql", "explain_query", "list_views", "describe_view"):
+    for required in ("execute_sql", "explain_query", "list_views", "describe_view",
+                     "data_health"):
         check(f"tool present: {required}", required in names, f"have: {sorted(names)}")
 
     es = next((t for t in tl if t["name"] == "execute_sql"), {})
@@ -211,6 +212,17 @@ def main() -> int:
 
     txt, err = call(url, "monthly_trend", {"months": 999})
     check("query-tool params are bounds-checked", err and "must be <=" in txt, txt[:160])
+
+    txt, err = call(url, "top_cities", {"days": 30, "limit": 2})
+    check("derived tools echo their inputs (reproducibility)",
+          not err and '[tool=top_cities params={"days": 30' in txt, txt[:160])
+
+    print("\ndata health")
+    txt, err = call(url, "data_health")
+    check("data_health runs", not err and ("checks pass" in txt or "checks fired" in txt),
+          txt[:200])
+    check("data_health frames findings as data, not server, problems",
+          "checks pass" in txt or "describe the DATA" in txt, txt[:200])
 
     # ---- timeout override (slow) -----------------------------------------
     if a.slow:

@@ -9,6 +9,7 @@ generated from the live schema (facts that go stale).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Callable
@@ -126,7 +127,7 @@ def _guard(sql: str) -> None:
 
 def _make_query_fn(
     name: str, qcfg: QueryToolCfg, db: Database, cfg: Config
-) -> Callable[..., Any]:
+) -> Callable[..., Any]:  # noqa: C901
     """Build an async function whose real signature matches the configured params.
 
     The SDK derives each tool's JSON schema from the function signature, so the
@@ -141,7 +142,11 @@ def _make_query_fn(
             except ValueError as exc:
                 raise ValueError(f"parameter '{pname}': {exc}") from exc
         rows, truncated = await db.fetch(qcfg.sql, bound or None)
-        return render_rows(rows, truncated, cfg.limits.max_rows)
+        body = render_rows(rows, truncated, cfg.limits.max_rows)
+        # Echo the inputs. A result pasted into a report tomorrow should be
+        # reconstructible without the conversation that produced it.
+        stamp = json.dumps(bound, default=str, ensure_ascii=False) if bound else "{}"
+        return f"[tool={name} params={stamp}]\n{body}"
 
     args: list[str] = []
     for pname, pcfg in qcfg.params.items():
@@ -287,6 +292,50 @@ def register(
         ),
     )
     registered.append("describe_view")
+
+    if cfg.tools.data_health.enabled and cfg.tools.data_health.checks:
+        checks = cfg.tools.data_health.checks
+
+        async def data_health() -> str:
+            """Run every configured anomaly check; report only what fires."""
+            out, fired = [], 0
+            for cname, chk in checks.items():
+                try:
+                    rows, _ = await db.fetch(chk.sql, cap=20)
+                except Exception as exc:  # noqa: BLE001 — one bad check must not hide the rest
+                    out.append(f"[{cname}] CHECK FAILED TO RUN: {exc}")
+                    continue
+                if not rows:
+                    continue
+                fired += 1
+                out.append(
+                    f"[{chk.severity.upper()}] {cname} — {chk.description.strip()}\n"
+                    + "\n".join(
+                        "  " + json.dumps(dict(r), default=str, ensure_ascii=False)
+                        for r in rows
+                    )
+                )
+            if not out:
+                return f"All {len(checks)} data-health checks pass — no anomalies detected."
+            return (
+                f"{fired} of {len(checks)} checks fired. These describe the DATA, not "
+                "the server — report them to the user rather than working around them.\n\n"
+                + "\n\n".join(out)
+            )
+
+        server.add_tool(
+            data_health,
+            name="data_health",
+            description=(
+                "Run the configured data-quality and business-anomaly checks and report "
+                "anything wrong with the underlying DATA — stalled pipelines, overdue "
+                "recurring charges, values that stopped arriving. Returns only checks "
+                "that fired.\n\nCall this when a figure looks surprising, before "
+                "concluding a trend is real, and whenever asked how healthy the data is. "
+                "A number can be correct and still be the symptom of a broken process."
+            ),
+        )
+        registered.append("data_health")
 
     for name, qcfg in cfg.tools.queries.items():
         fn = _make_query_fn(name, qcfg, db, cfg)

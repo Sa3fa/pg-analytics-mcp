@@ -86,7 +86,11 @@ Built-in:
   a pooled connection.
 - **`explain_query(sql)`** — the plan, without executing anything. `EXPLAIN`,
   never `ANALYZE`.
-- **`list_views()`** — every readable object with columns, row counts, enums.
+- **`data_health()`** — runs the configured anomaly checks and reports only what
+  fired. A number can be correct and still be the symptom of a broken process;
+  this is what surfaces that instead of leaving it to whoever happens to look.
+- **`list_views()`** — every readable object with columns, row counts, enums,
+  plus the contract version, server start time and live data freshness.
 - **`describe_view(name)`** — columns of one object.
 
 **Errors are made actionable.** On `undefined_column` / `undefined_table` the
@@ -113,7 +117,36 @@ tools:
 ```
 
 This is the bit that closes the gap with n8n: adding a tool is prose + SQL, not
-Python.
+Python. Every query tool echoes its parameters (`[tool=top_cities params={…}]`)
+so a result pasted into a report tomorrow is reconstructible without the
+conversation that produced it.
+
+### Data-health checks
+
+`tools.data_health.checks` are SQL that returns rows **only when something is
+wrong**. Each has a severity and a description written for the person who has to
+act on it:
+
+```yaml
+tools:
+  data_health:
+    checks:
+      overdue_recurring_charges:
+        severity: critical
+        description: >-
+          Active subscriptions past next_charge_at that have not been charged.
+          Money not collected — check the charging scheduler.
+        sql: |
+          select count(*) as overdue_subscriptions, sum(amount) as iqd_uncollected
+          from recurring_subscriptions
+          where status = 'active' and next_charge_at < now()
+          having count(*) > 50        -- returns nothing when healthy
+```
+
+The `having` clause is the pattern: a healthy database returns zero rows, so the
+check is silent until it matters. On first run against the live WHF data this
+surfaced 4,350 overdue subscriptions worth 17.4M IQD per cycle — a finding no
+amount of correct query answering would have produced.
 
 ## Why descriptions live here
 

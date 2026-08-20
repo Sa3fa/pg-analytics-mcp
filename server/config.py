@@ -142,9 +142,23 @@ class ExplainCfg(BaseModel):
     enabled: bool = True
 
 
+class HealthCheckCfg(BaseModel):
+    """SQL that returns rows ONLY when something is wrong."""
+
+    description: str
+    sql: str
+    severity: Literal["info", "warning", "critical"] = "warning"
+
+
+class HealthCfg(BaseModel):
+    enabled: bool = True
+    checks: dict[str, HealthCheckCfg] = Field(default_factory=dict)
+
+
 class ToolsCfg(BaseModel):
     execute_sql: ExecuteSqlCfg = Field(default_factory=ExecuteSqlCfg)
     explain_query: ExplainCfg = Field(default_factory=ExplainCfg)
+    data_health: HealthCfg = Field(default_factory=HealthCfg)
     queries: dict[str, QueryToolCfg] = Field(default_factory=dict)
 
 

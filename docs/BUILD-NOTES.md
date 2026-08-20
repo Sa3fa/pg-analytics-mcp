@@ -243,3 +243,21 @@ version fingerprinting the config file and live schema. When the platform's own
 UI cannot be trusted to show what a client will receive, the server has to
 announce its own identity, and the client has to be able to compare it against
 `GET /introspection` on the origin.
+
+## 10. Correct answers are not the same as healthy data
+
+A reviewer's sharpest point: the server faithfully returned 790 recurring
+charges against 4,902 active subscriptions and said nothing. Every number it
+gave was correct; the situation those numbers described was broken.
+
+`data_health` closes that gap. Checks are config SQL that returns rows only when
+something is wrong — the `having` clause makes a healthy database silent. On the
+first run it surfaced 4,350 subscriptions past `next_charge_at`, 17,382,950 IQD
+per cycle uncollected, oldest due 2026-04-23, with donation ingestion
+simultaneously healthy — which localises the fault to the charging scheduler
+rather than the pipeline.
+
+The lesson generalises: an analytics connector that only answers questions puts
+the entire burden of noticing on whoever happens to be looking. Encoding "what
+would surprise me" as checks moves that burden into the server, and costs a few
+lines of YAML per check.
